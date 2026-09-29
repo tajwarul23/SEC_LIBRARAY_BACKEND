@@ -15,7 +15,7 @@ import { ReserveBook } from "../models/reserve-book.js";
 import User from "../models/user-auth-models.js";
 import { enqueueWaitlistAvailability } from "../queues/waitlist-queue.js";
 
-const EXPIRY_FINE = 20;
+import { RESERVATION_EXPIRY_FINE } from "../config/library.js";
 
 const expireReservations = async () => {
   try {
@@ -50,7 +50,7 @@ const expireReservations = async () => {
         );
 
         // Apply expiry fine to user
-        await User.updateOne({ _id: reservation.user }, { $inc: { fine: EXPIRY_FINE } });
+        await User.updateOne({ _id: reservation.user }, { $inc: { fine: RESERVATION_EXPIRY_FINE } });
 
         // Notify next students on waitlist that a copy has become available
         if (updatedBook) {

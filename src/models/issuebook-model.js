@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-const BORROW_DURATION_DAYS = 7;
+import { LOAN_DURATION_DAYS, DAY_MS } from "../config/library.js";
 
 const issuedBookSchema = new mongoose.Schema(
   {
@@ -48,7 +48,7 @@ const issuedBookSchema = new mongoose.Schema(
       type: Date,
       required: true,
       default: function () {
-        return new Date(this.borrowedAt.getTime() + BORROW_DURATION_DAYS * 24 * 60 * 60 * 1000);
+        return new Date(this.borrowedAt.getTime() + LOAN_DURATION_DAYS * DAY_MS);
       },
       index: true,
     },
@@ -65,6 +65,9 @@ const issuedBookSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    // Full overdue days already added to the student's fine (see
+    // services/late-fine-service.js). Stored so charging is idempotent.
+    lateFineDaysCharged: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

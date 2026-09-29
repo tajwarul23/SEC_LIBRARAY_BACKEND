@@ -8,6 +8,7 @@ import {
   cancelWaitlist,
   getMyReservations,
   getMyIssuedBooks,
+  getLibraryConfig,
 } from "../controllers/user-book-access-controller.js";
 import {
   getAllResearchPapers,
@@ -23,6 +24,9 @@ const router = express.Router();
 
 router.use(authenticate);
 router.use(studentRateLimiter);
+
+// Library rules (hold time, loan period, fines) for UI labels
+router.get("/library-config", getLibraryConfig);
 
 // Books
 router.get("/books", getBooksForStudent);

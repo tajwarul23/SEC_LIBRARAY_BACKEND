@@ -8,6 +8,12 @@ export default {
   // Path pattern to look for test files
   testMatch: ["**/tests/**/*.test.js"],
 
+  // Pin env vars before any test file loads, so tests never read the real .env
+  setupFiles: ["<rootDir>/tests/setup-env.js"],
+
+  // First run downloads the in-memory MongoDB binary, which can take a while
+  testTimeout: 60000,
+
   // Automatically clear mock calls between tests
   clearMocks: true,
 

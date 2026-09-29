@@ -4,6 +4,7 @@ import {
   handleIpnValidation,
   getMyPaymentHistory,
   getMyPaymentStatus,
+  closePendingTransaction,
 } from "../services/payment-service.js";
 
 export const initPaymentHandler = async (req, res) => {
@@ -31,8 +32,22 @@ export const ipnHandler = async (req, res) => {
   return res.status(200).send("IPN received");
 };
 
-const buildRedirectHandler = (status) => (req, res) => {
+const CLOSED_STATUS = { fail: "FAILED", cancel: "CANCELLED" };
+
+const buildRedirectHandler = (status) => async (req, res) => {
   const tran_id = req.body?.tran_id || req.query?.tran_id || "";
+
+  // Fail/cancel: close the PENDING transaction so the result page can show
+  // the outcome instead of "Confirming..." forever. Success is left to the
+  // IPN (the only trusted path that clears fines).
+  if (CLOSED_STATUS[status]) {
+    try {
+      await closePendingTransaction(tran_id, CLOSED_STATUS[status]);
+    } catch (error) {
+      console.error(`sslcommerz ${status} redirect: failed to close transaction`, error);
+    }
+  }
+
   const studentClientUrl = process.env.STUDENT_CLIENT_URL || "";
   const redirectUrl = `${studentClientUrl}/fine/payment-result?status=${status}&tran_id=${encodeURIComponent(tran_id)}`;
   return res.redirect(303, redirectUrl);

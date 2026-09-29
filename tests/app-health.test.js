@@ -29,3 +29,9 @@ describe("API Routes: Health & 404", () => {
     });
   });
 });
+
+describe("App config: proxy trust", () => {
+  test("does not trust X-Forwarded-For outside production (no proxy locally)", () => {
+    expect(app.get("trust proxy")).toBe(0);
+  });
+});

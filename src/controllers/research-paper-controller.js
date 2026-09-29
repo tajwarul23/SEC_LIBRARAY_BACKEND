@@ -1,3 +1,4 @@
+import { escapeRegex, asTrimmedString } from "../utils/escape-regex.js";
 import ResearchPaper from "../models/research-paper-model.js";
 
 // Looks for an existing paper with the same paperLink or the same doi.
@@ -207,6 +208,15 @@ export const createResearchPaper = async (req, res) => {
 export const getMyResearchPapers = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
+    // Guests have no papers. Without this, { "submittedBy.userId": null }
+    // would match admin-created papers (which have no submitter).
+    if (!userId) {
+      return res.status(200).json({
+        success: true,
+        pagination: { currentPage: 1, limit: 0, totalPapers: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false },
+        papers: [],
+      });
+    }
     const { status } = req.query;
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);
@@ -470,7 +480,8 @@ export const getResearchPaperById = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id || req.user?._id;
-    const isAdmin = req.user?.role === "admin";
+    // Admin-portal guests see what an admin sees (read-only)
+    const isAdmin = req.user?.role === "admin" || Boolean(req.user?.isAdminGuest);
 
     let filter = { _id: id };
 
@@ -527,7 +538,8 @@ export const searchResearchPapers = async (req, res) => {
     const skip = (currentPage - 1) * perPage;
 
     const userId = req.user?.id || req.user?._id;
-    const isAdmin = req.user?.role === "admin";
+    // Admin-portal guests see what an admin sees (read-only)
+    const isAdmin = req.user?.role === "admin" || Boolean(req.user?.isAdminGuest);
 
     const filter = {};
 
@@ -543,9 +555,11 @@ export const searchResearchPapers = async (req, res) => {
     }
 
     const searchConditions = [];
+    // Escaped so typed text is matched literally, never run as a pattern
+    const term = (value) => escapeRegex(asTrimmedString(value));
+    const search = term(query);
 
-    if (query && query.trim()) {
-      const search = query.trim();
+    if (search) {
       searchConditions.push({
         $or: [
           { title: { $regex: search, $options: "i" } },
@@ -560,13 +574,19 @@ export const searchResearchPapers = async (req, res) => {
       });
     }
 
-    if (title && title.trim()) searchConditions.push({ title: { $regex: title.trim(), $options: "i" } });
-    if (author && author.trim()) searchConditions.push({ "authors.name": { $regex: author.trim(), $options: "i" } });
-    if (category && category.trim()) searchConditions.push({ category: { $regex: category.trim(), $options: "i" } });
-    if (keyword && keyword.trim()) searchConditions.push({ keywords: { $regex: keyword.trim(), $options: "i" } });
-    if (journal && journal.trim()) searchConditions.push({ journalName: { $regex: journal.trim(), $options: "i" } });
-    if (conference && conference.trim()) searchConditions.push({ conferenceName: { $regex: conference.trim(), $options: "i" } });
-    if (doi && doi.trim()) searchConditions.push({ doi: { $regex: doi.trim(), $options: "i" } });
+    const fieldFilters = [
+      ["title", title],
+      ["authors.name", author],
+      ["category", category],
+      ["keywords", keyword],
+      ["journalName", journal],
+      ["conferenceName", conference],
+      ["doi", doi],
+    ];
+    for (const [field, value] of fieldFilters) {
+      const safe = term(value);
+      if (safe) searchConditions.push({ [field]: { $regex: safe, $options: "i" } });
+    }
 
     if (searchConditions.length > 0) {
       if (filter.$or) {

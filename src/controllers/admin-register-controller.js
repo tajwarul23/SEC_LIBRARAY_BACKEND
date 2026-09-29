@@ -1,6 +1,6 @@
 import { registerAdminSchema, loginAdminSchema } from "../validators/admin-validator.js";
 import { registerAdmin, loginAdmin } from "../services/admin-register-service.js";
-import { signAuthToken, setAuthCookie, clearAuthCookie } from "../services/token-service.js";
+import { signAuthToken, setAuthCookie, clearAuthCookie, ADMIN_COOKIE } from "../services/token-service.js";
 
 function publicAdmin(admin) {
   return {
@@ -63,7 +63,7 @@ export const loginAdminHandler = async (req, res) => {
     const data = loginAdminSchema.parse(req.body);
     const admin = await loginAdmin(data);
     const token = signAuthToken(admin);
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, ADMIN_COOKIE);
 
     return res.status(200).json({
       success: true,
@@ -98,7 +98,7 @@ export const me = async (req, res) => {
 
 export const logoutAdminHandler = async (req, res) => {
   try {
-    clearAuthCookie(res);
+    clearAuthCookie(res, ADMIN_COOKIE);
     return res.status(200).json({
       success: true,
       message: "Admin logged out successfully",

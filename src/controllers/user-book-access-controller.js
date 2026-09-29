@@ -5,6 +5,22 @@ import { IssuedBook } from "../models/issuebook-model.js";
 import { Waitlist } from "../models/waitlist-model.js";
 import User from "../models/user-auth-models.js";
 import { buildBookSearchFilter } from "../utils/book-search.js";
+import { MAX_PAGE_SIZE } from "../utils/pagination.js";
+import { asTrimmedString } from "../utils/escape-regex.js";
+import { countActiveBooks } from "../services/borrow-limit-service.js";
+import { RESERVATION_HOLD_MINUTES, MINUTE_MS, publicLibraryConfig } from "../config/library.js";
+
+// 2 -> "2 minutes", 120 -> "2 hours", 90 -> "90 minutes"
+const formatHold = (minutes) =>
+  minutes % 60 === 0
+    ? `${minutes / 60} hour${minutes === 60 ? "" : "s"}`
+    : `${minutes} minute${minutes === 1 ? "" : "s"}`;
+
+// GET /api/student/access/library-config — rules the student app shows in
+// its labels (hold time, loan period, fines), so they never drift apart.
+export const getLibraryConfig = (req, res) => {
+  return res.status(200).json({ success: true, data: publicLibraryConfig() });
+};
 
 // Pagination helper
 const getOffsetPagination = (query) => {
@@ -18,7 +34,7 @@ const getOffsetPagination = (query) => {
     return { error: "limit must be a positive number" };
   }
 
-  return { offset, limit };
+  return { offset, limit: Math.min(limit, MAX_PAGE_SIZE) };
 };
 
 // GET /api/student/access/books
@@ -71,8 +87,8 @@ export const getBooksForStudent = async (req, res) => {
 // GET /api/student/access/books/search
 export const searchBook = async (req, res) => {
   try {
-    const { query } = req.query;
-    if (!query || !query.trim()) {
+    const query = asTrimmedString(req.query.query);
+    if (!query) {
       return res.status(400).json({ success: false, message: "Search query is required" });
     }
 
@@ -80,12 +96,13 @@ export const searchBook = async (req, res) => {
     const books = await Book.find(filter)
       .select("title authors category isbn totalCopies availableCopies coverImage")
       .sort({ title: 1 })
+      .limit(MAX_PAGE_SIZE)
       .lean();
 
     return res.status(200).json({
       success: true,
       message: books.length > 0 ? "Books found" : "No books found",
-      query: query.trim(),
+      query,
       searchedFields,
       totalCount: books.length,
       data: books,
@@ -133,16 +150,13 @@ export const reserveBook = async (req, res) => {
       });
     }
 
-    // Check active borrowed books count (at most 3 borrowed books allowed)
-    const borrowedCount = await IssuedBook.countDocuments({
-      user: userId,
-      status: { $in: ["borrowed", "overdue"] },
-    });
-    if (borrowedCount >= 3) {
+    // Issued books AND active reservations count toward the limit
+    const active = await countActiveBooks(userId);
+    if (active.total >= active.limit) {
       return res.status(409).json({
         success: false,
-        message: "Borrowing limit (3) reached. You cannot reserve more books until you return current ones.",
-        data: { borrowedCount },
+        message: `Limit reached: you can hold ${active.limit} books at once (issued + reserved). You have ${active.issued} issued and ${active.reserved} reserved.`,
+        data: active,
       });
     }
 
@@ -214,7 +228,7 @@ export const reserveBook = async (req, res) => {
         user_Session: user.Session,
         status: "pending",
         reservedAt: new Date(),
-        expiresAt: new Date(Date.now() + 2 * 60 * 1000),
+        expiresAt: new Date(Date.now() + RESERVATION_HOLD_MINUTES * MINUTE_MS),
       });
     } catch (err) {
       await Book.updateOne({ _id: bookId }, { $inc: { availableCopies: 1 } });
@@ -223,7 +237,7 @@ export const reserveBook = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Book reserved successfully for 2 hours",
+      message: `Book reserved. Collect it within ${formatHold(RESERVATION_HOLD_MINUTES)}.`,
       data: {
         reservedId: reservation.reservedId,
         book: { id: reservation.book, title: reservation.book_title, authors: reservation.book_authors },

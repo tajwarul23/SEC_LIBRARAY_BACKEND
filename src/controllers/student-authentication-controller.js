@@ -1,6 +1,9 @@
 import StudentAuthentication from "../models/student-authentication-model.js";
 import User from "../models/user-auth-models.js";
 import TemporaryRegNo from "../models/TemporaryRegNo.js";
+import { countActiveBooks } from "../services/borrow-limit-service.js";
+import { clampLimit, clampOffset, MAX_PAGE_SIZE } from "../utils/pagination.js";
+import { escapeRegex, asTrimmedString } from "../utils/escape-regex.js";
 
 export const createStudentAuthentication = async (req, res) => {
   try {
@@ -57,8 +60,8 @@ export const createStudentAuthentication = async (req, res) => {
 
 export const getAllStudentAuthentications = async (req, res) => {
   try {
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 20;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 20);
     const { department, Session } = req.query;
 
     const filter = {};
@@ -112,7 +115,26 @@ export const deleteStudentAuthentication = async (req, res) => {
 
     const findUserByRegNo = await User.findOne({ regNo: finds.regNo });
 
-    await TemporaryRegNo.create({ regNo: finds.regNo });
+    // Don't delete a student who still has library items or an unpaid fine:
+    // their loans/reservations would be orphaned and the fine lost.
+    if (findUserByRegNo) {
+      const active = await countActiveBooks(findUserByRegNo._id);
+      const fine = findUserByRegNo.fine || 0;
+      if (active.total > 0 || fine > 0) {
+        return res.status(409).json({
+          success: false,
+          message: `Can't delete: student has ${active.issued} book(s) issued, ${active.reserved} reserved and a fine of ৳${fine}. Clear these first.`,
+        });
+      }
+    }
+
+    // Upsert: deleting the same regNo twice within the block window used to
+    // fail on the unique index and leave the student half-deleted.
+    await TemporaryRegNo.updateOne(
+      { regNo: finds.regNo },
+      { $set: { expiresAt: new Date(Date.now() + 60 * 60 * 1000) } },
+      { upsert: true }
+    );
 
     if (findUserByRegNo) {
       await User.findByIdAndDelete(findUserByRegNo._id);
@@ -137,7 +159,7 @@ export const deleteStudentAuthentication = async (req, res) => {
 
 export const searchStudentAuthentication = async (req, res) => {
   try {
-    const { query } = req.body;
+    const query = asTrimmedString(req.body?.query);
     if (!query) {
       return res.status(400).json({
         success: false,
@@ -145,13 +167,14 @@ export const searchStudentAuthentication = async (req, res) => {
       });
     }
 
+    const safe = escapeRegex(query);
     const searchResults = await StudentAuthentication.find({
       $or: [
-        { name: { $regex: query, $options: "i" } },
-        { gmail: { $regex: query, $options: "i" } },
-        { regNo: { $regex: query, $options: "i" } },
+        { name: { $regex: safe, $options: "i" } },
+        { gmail: { $regex: safe, $options: "i" } },
+        { regNo: { $regex: safe, $options: "i" } },
       ],
-    });
+    }).limit(MAX_PAGE_SIZE);
 
     return res.status(200).json({
       success: true,

@@ -1,6 +1,10 @@
 import jwt from "jsonwebtoken";
 
-const COOKIE_NAME = "auth_token";
+// Separate cookies per portal: both portals talk to the same backend domain,
+// so a shared cookie name meant logging into one portal logged the other out.
+export const ADMIN_COOKIE = "admin_token";
+export const STUDENT_COOKIE = "student_token";
+
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function signAuthToken(user) {
@@ -15,9 +19,9 @@ export function verifyAuthToken(token) {
   return jwt.verify(token, process.env.JWT_ACCESS_SECRET);
 }
 
-export function setAuthCookie(res, token) {
+function cookieOptions() {
   const isProd = process.env.NODE_ENV === "production";
-  res.cookie(COOKIE_NAME, token, {
+  return {
     httpOnly: true,
     // SameSite=None requires Secure — browsers silently drop the cookie
     // otherwise. Production frontend/backend live on different domains
@@ -25,23 +29,21 @@ export function setAuthCookie(res, token) {
     // ports on localhost (same-site), so Lax works over plain HTTP.
     secure: isProd,
     sameSite: isProd ? "none" : "lax",
-    maxAge: SESSION_TTL_MS,
     path: "/",
-  });
+  };
 }
 
-export function clearAuthCookie(res) {
-  const isProd = process.env.NODE_ENV === "production";
-  res.clearCookie(COOKIE_NAME, {
-    path: "/",
-    secure: isProd,
-    sameSite: isProd ? "none" : "lax",
-  });
+export function setAuthCookie(res, token, cookieName, maxAge = SESSION_TTL_MS) {
+  res.cookie(cookieName, token, { ...cookieOptions(), maxAge });
 }
 
-export function getAuthTokenFromCookie(req) {
-  if (req.cookies?.[COOKIE_NAME]) {
-    return req.cookies[COOKIE_NAME];
+export function clearAuthCookie(res, cookieName) {
+  res.clearCookie(cookieName, cookieOptions());
+}
+
+export function getAuthTokenFromCookie(req, cookieName) {
+  if (cookieName && req.cookies?.[cookieName]) {
+    return req.cookies[cookieName];
   }
   const authHeader = req.headers?.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {

@@ -1,5 +1,16 @@
 export function handleAuthError(res, error, label) {
-  console.error(`${label} error:`, error);
+  // Expected outcomes (wrong password, unknown regNo, validation) only get a
+  // one-line log; full stack traces are kept for real server errors.
+  const isExpected =
+    error?.name === "ZodError" ||
+    error?.name === "ValidationError" ||
+    error?.code === 11000 ||
+    (error?.statusCode && error.statusCode < 500);
+  if (isExpected) {
+    console.warn(`${label}: ${error?.message}`);
+  } else {
+    console.error(`${label} error:`, error);
+  }
 
   if (error?.name === "ZodError") {
     return res.status(400).json({

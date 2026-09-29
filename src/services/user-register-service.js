@@ -7,12 +7,11 @@ export async function registerUser(data) {
     $or: [
       { email: data.email },
       { regNo: data.regNo },
-      { phone: data.phone },
     ],
   }).lean();
 
   if (existing) {
-    const err = new Error("User with this email, regNo, or phone already exists");
+    const err = new Error("User with this email or regNo already exists");
     err.statusCode = 409;
     throw err;
   }
@@ -34,7 +33,6 @@ export async function registerUser(data) {
     name: data.name,
     regNo: data.regNo,
     email: data.email,
-    phone: data.phone,
     password: passwordHash,
     department: data.department,
     Session: data.Session,
@@ -45,7 +43,9 @@ export async function registerUser(data) {
 
 export async function loginUser(data) {
   const user = await User.findOne({ regNo: data.regNo }).select("+password");
-  if (!user) {
+  // Google-claimed accounts have no password — treat like a wrong password
+  // instead of letting bcrypt throw on an undefined hash (was a 500).
+  if (!user || !user.password) {
     const err = new Error("Invalid regNo or password");
     err.statusCode = 401;
     throw err;
@@ -63,6 +63,19 @@ export async function loginUser(data) {
 
 export async function changePassword(userId, data) {
   const user = await User.findById(userId).select("+password");
+
+  if (!user.password) {
+    const err = new Error("This account signs in with Google and has no password to change");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const currentOk = await bcrypt.compare(data.currentPassword, user.password);
+  if (!currentOk) {
+    const err = new Error("Current password is incorrect");
+    err.statusCode = 401;
+    throw err;
+  }
 
   const isSame = await bcrypt.compare(data.newPassword, user.password);
   if (isSame) {

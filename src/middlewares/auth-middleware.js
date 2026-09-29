@@ -1,4 +1,10 @@
-import { verifyAuthToken, getAuthTokenFromCookie } from "../services/token-service.js";
+import { verifyAuthToken, getAuthTokenFromCookie, STUDENT_COOKIE } from "../services/token-service.js";
+import {
+  isGuestPayload,
+  isGuestRequestAllowed,
+  guestStudentProfile,
+  GUEST_READ_ONLY_MESSAGE,
+} from "../services/guest-service.js";
 import User from "../models/user-auth-models.js";
 import TemporaryRegNo from "../models/TemporaryRegNo.js";
 
@@ -14,7 +20,7 @@ import TemporaryRegNo from "../models/TemporaryRegNo.js";
  */
 export async function authenticate(req, res, next) {
   // Step 1: Extract JWT token
-  const token = getAuthTokenFromCookie(req);
+  const token = getAuthTokenFromCookie(req, STUDENT_COOKIE);
   if (!token) {
     return res.status(401).json({ success: false, message: "Authentication required" });
   }
@@ -27,9 +33,23 @@ export async function authenticate(req, res, next) {
     return res.status(401).json({ success: false, message: "Invalid or expired token" });
   }
 
+  // Guests have no database record and may only read (plus logout/chatbot)
+  if (isGuestPayload(payload, "student")) {
+    if (!isGuestRequestAllowed(req, "student")) {
+      return res.status(403).json({ success: false, message: GUEST_READ_ONLY_MESSAGE });
+    }
+    req.user = guestStudentProfile(payload.guestId);
+    return next();
+  }
+
+  // Any other role (e.g. an admin token) is not a student session
+  if (payload.role !== "user") {
+    return res.status(401).json({ success: false, message: "Invalid or expired token" });
+  }
+
   try {
     const user = await User.findById(payload.id)
-      .select("name regNo email phone department Session role fine")
+      .select("name regNo email department Session role fine")
       .lean();
 
     if (!user) {
@@ -50,7 +70,6 @@ export async function authenticate(req, res, next) {
       name: user.name,
       regNo: user.regNo,
       email: user.email,
-      phone: user.phone,
       department: user.department,
       Session: user.Session,
       role: user.role || "user",

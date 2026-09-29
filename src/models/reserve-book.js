@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-const RESERVATION_DURATION_MINUTES = 2;
+import { RESERVATION_HOLD_MINUTES, MINUTE_MS } from "../config/library.js";
 
 const reserveBookSchema = new mongoose.Schema(
   {
@@ -40,7 +40,7 @@ const reserveBookSchema = new mongoose.Schema(
       type: Date,
       required: true,
       default: function () {
-        return new Date(this.reservedAt.getTime() + RESERVATION_DURATION_MINUTES * 60 * 1000);
+        return new Date(this.reservedAt.getTime() + RESERVATION_HOLD_MINUTES * MINUTE_MS);
       },
       index: true,
     },

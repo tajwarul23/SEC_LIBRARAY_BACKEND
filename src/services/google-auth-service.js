@@ -8,6 +8,17 @@ function makeError(message, statusCode) {
   return err;
 }
 
+// "Tajwarul Chowdhury" -> "T******* C********": enough for a student to
+// recognise their own record, without exposing the roster to anyone who
+// types in sequential regNos.
+export function maskName(name = "") {
+  return name
+    .trim()
+    .split(/\s+/)
+    .map((word) => word[0] + "*".repeat(Math.max(word.length - 1, 0)))
+    .join(" ");
+}
+
 export async function checkRegNo(regNo) {
   const studentAuth = await StudentAuthentication.findOne({ regNo }).lean();
   if (!studentAuth) {
@@ -19,9 +30,7 @@ export async function checkRegNo(regNo) {
 
   return {
     regNo: studentAuth.regNo,
-    name: studentAuth.name,
-    department: studentAuth.department,
-    Session: studentAuth.Session,
+    name: maskName(studentAuth.name),
     claimed: Boolean(studentAuth.firebaseUid),
   };
 }

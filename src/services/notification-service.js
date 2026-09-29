@@ -1,6 +1,7 @@
 import { Notification } from "../models/notification-model.js";
 import { Waitlist } from "../models/waitlist-model.js";
 import { Book } from "../models/book-model.js";
+import { clampLimit, clampOffset } from "../utils/pagination.js";
 
 export async function createBookAvailableNotification({
   userId,
@@ -88,8 +89,8 @@ export async function triggerWaitlistAvailability(bookId, availableCopies = 1) {
 }
 
 export async function getMyNotifications(userId, query = {}) {
-  const offset = Number.parseInt(query.offset ?? "0", 10);
-  const limit = Math.min(Number.parseInt(query.limit ?? "20", 10), 100);
+  const offset = clampOffset(query.offset);
+  const limit = clampLimit(query.limit, 20);
   const onlyUnread = query.unread === "true";
 
   const filter = {

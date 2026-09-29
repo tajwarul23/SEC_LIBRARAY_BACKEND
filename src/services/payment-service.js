@@ -2,12 +2,13 @@ import crypto from "node:crypto";
 import User from "../models/user-auth-models.js";
 import { Transaction } from "../models/transaction-model.js";
 import { sslcz } from "../config/sslcommerz.js";
+import { clampLimit, clampOffset } from "../utils/pagination.js";
 import { createFineClearedNotification } from "./notification-service.js";
 
 const CURRENCY = "BDT";
 
 export async function initFinePayment(reqUser) {
-  const user = await User.findById(reqUser.id).select("name regNo email phone fine").lean();
+  const user = await User.findById(reqUser.id).select("name regNo email fine").lean();
 
   if (!user) {
     const error = new Error("User not found");
@@ -54,7 +55,8 @@ export async function initFinePayment(reqUser) {
     cus_state: "Sylhet",
     cus_postcode: "3100",
     cus_country: "Bangladesh",
-    cus_phone: user.phone || "N/A",
+    // Students have no phone on file; SSLCommerz requires the field
+    cus_phone: "N/A",
   };
 
   const apiResponse = await sslcz.init(initData);
@@ -159,9 +161,19 @@ async function applyFineForTransaction(transaction) {
   }
 }
 
+// Called from the fail/cancel browser redirects. Only a still-PENDING
+// transaction is closed, and never a VALID one: if a (spoofed or early)
+// redirect closes it and SSLCommerz later validates the payment, the IPN
+// handler's `status: { $ne: "VALID" }` claim still marks it VALID and
+// clears the fine.
+export async function closePendingTransaction(tran_id, status) {
+  if (typeof tran_id !== "string" || !tran_id) return;
+  await Transaction.updateOne({ tran_id, status: "PENDING" }, { $set: { status } });
+}
+
 export async function getMyPaymentHistory(userId, query = {}) {
-  const offset = Number.parseInt(query.offset ?? "0", 10);
-  const limit = Math.min(Number.parseInt(query.limit ?? "20", 10), 100);
+  const offset = clampOffset(query.offset);
+  const limit = clampLimit(query.limit, 20);
 
   const [totalCount, transactions] = await Promise.all([
     Transaction.countDocuments({ user: userId }),
@@ -188,8 +200,8 @@ export async function getMyPaymentStatus(userId, tran_id) {
 }
 
 export async function getAllPaymentsForAdmin(query = {}) {
-  const offset = Number.parseInt(query.offset ?? "0", 10);
-  const limit = Math.min(Number.parseInt(query.limit ?? "20", 10), 100);
+  const offset = clampOffset(query.offset);
+  const limit = clampLimit(query.limit, 20);
   const { regNo, status } = query;
 
   const filter = {};

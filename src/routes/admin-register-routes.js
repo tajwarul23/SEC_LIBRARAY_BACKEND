@@ -6,11 +6,16 @@ import {
   me,
 } from "../controllers/admin-register-controller.js";
 import { authenticateAdmin, loadAdmin } from "../middlewares/admin-middleware.js";
+import { adminAuthRateLimiter, guestLoginRateLimiter } from "../middlewares/rate-limiter.js";
+import { adminGuestLogin } from "../controllers/guest-controller.js";
 
 const router = Router();
 
-router.post("/register", registerAdminHandler);
-router.post("/login", loginAdminHandler);
+// Only an existing, logged-in admin can create another admin.
+// The very first admin is created with `npm run seed:admin`.
+router.post("/register", authenticateAdmin, loadAdmin, registerAdminHandler);
+router.post("/login", adminAuthRateLimiter, loginAdminHandler);
+router.post("/guest", guestLoginRateLimiter, adminGuestLogin);
 router.post("/logout", authenticateAdmin, logoutAdminHandler);
 router.get("/me", authenticateAdmin, loadAdmin, me);
 
