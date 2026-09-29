@@ -1,3 +1,4 @@
+import { escapeRegex, asTrimmedString } from "../utils/escape-regex.js";
 import ResearchPaper from "../models/research-paper-model.js";
 
 // Looks for an existing paper with the same paperLink or the same doi.
@@ -543,9 +544,11 @@ export const searchResearchPapers = async (req, res) => {
     }
 
     const searchConditions = [];
+    // Escaped so typed text is matched literally, never run as a pattern
+    const term = (value) => escapeRegex(asTrimmedString(value));
+    const search = term(query);
 
-    if (query && query.trim()) {
-      const search = query.trim();
+    if (search) {
       searchConditions.push({
         $or: [
           { title: { $regex: search, $options: "i" } },
@@ -560,13 +563,19 @@ export const searchResearchPapers = async (req, res) => {
       });
     }
 
-    if (title && title.trim()) searchConditions.push({ title: { $regex: title.trim(), $options: "i" } });
-    if (author && author.trim()) searchConditions.push({ "authors.name": { $regex: author.trim(), $options: "i" } });
-    if (category && category.trim()) searchConditions.push({ category: { $regex: category.trim(), $options: "i" } });
-    if (keyword && keyword.trim()) searchConditions.push({ keywords: { $regex: keyword.trim(), $options: "i" } });
-    if (journal && journal.trim()) searchConditions.push({ journalName: { $regex: journal.trim(), $options: "i" } });
-    if (conference && conference.trim()) searchConditions.push({ conferenceName: { $regex: conference.trim(), $options: "i" } });
-    if (doi && doi.trim()) searchConditions.push({ doi: { $regex: doi.trim(), $options: "i" } });
+    const fieldFilters = [
+      ["title", title],
+      ["authors.name", author],
+      ["category", category],
+      ["keywords", keyword],
+      ["journalName", journal],
+      ["conferenceName", conference],
+      ["doi", doi],
+    ];
+    for (const [field, value] of fieldFilters) {
+      const safe = term(value);
+      if (safe) searchConditions.push({ [field]: { $regex: safe, $options: "i" } });
+    }
 
     if (searchConditions.length > 0) {
       if (filter.$or) {

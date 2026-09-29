@@ -11,6 +11,9 @@ process.env.MONGO_URI = "mongodb://127.0.0.1:1/unused-in-tests";
 process.env.CLIENT_URL = "http://admin.test";
 process.env.STUDENT_CLIENT_URL = "http://student.test";
 process.env.BACKEND_URL = "http://backend.test";
+// Off by default; individual tests switch it on. Empty (not deleted) so a
+// later dotenv.config() can never load the real .env value into tests.
+process.env.ALLOW_PASSWORD_LOGIN = "";
 
 process.env.QDRANT_URL_RAG = "";
 process.env.QDRANT_API_KEY_RAG = "";

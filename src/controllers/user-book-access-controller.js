@@ -5,6 +5,8 @@ import { IssuedBook } from "../models/issuebook-model.js";
 import { Waitlist } from "../models/waitlist-model.js";
 import User from "../models/user-auth-models.js";
 import { buildBookSearchFilter } from "../utils/book-search.js";
+import { MAX_PAGE_SIZE } from "../utils/pagination.js";
+import { asTrimmedString } from "../utils/escape-regex.js";
 
 // Pagination helper
 const getOffsetPagination = (query) => {
@@ -18,7 +20,7 @@ const getOffsetPagination = (query) => {
     return { error: "limit must be a positive number" };
   }
 
-  return { offset, limit };
+  return { offset, limit: Math.min(limit, MAX_PAGE_SIZE) };
 };
 
 // GET /api/student/access/books
@@ -71,8 +73,8 @@ export const getBooksForStudent = async (req, res) => {
 // GET /api/student/access/books/search
 export const searchBook = async (req, res) => {
   try {
-    const { query } = req.query;
-    if (!query || !query.trim()) {
+    const query = asTrimmedString(req.query.query);
+    if (!query) {
       return res.status(400).json({ success: false, message: "Search query is required" });
     }
 
@@ -80,12 +82,13 @@ export const searchBook = async (req, res) => {
     const books = await Book.find(filter)
       .select("title authors category isbn totalCopies availableCopies coverImage")
       .sort({ title: 1 })
+      .limit(MAX_PAGE_SIZE)
       .lean();
 
     return res.status(200).json({
       success: true,
       message: books.length > 0 ? "Books found" : "No books found",
-      query: query.trim(),
+      query,
       searchedFields,
       totalCount: books.length,
       data: books,

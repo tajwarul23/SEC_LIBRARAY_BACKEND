@@ -4,6 +4,8 @@ import { ReserveBook } from "../models/reserve-book.js";
 import { IssuedBook } from "../models/issuebook-model.js";
 import { enqueueWaitlistAvailability } from "../queues/waitlist-queue.js";
 import { buildBookSearchFilter } from "../utils/book-search.js";
+import { clampLimit, clampOffset } from "../utils/pagination.js";
+import { escapeRegex, asTrimmedString } from "../utils/escape-regex.js";
 
 const ALLOWED_CATEGORIES = [
   "CSE",
@@ -267,8 +269,8 @@ export const deleteBook = async (req, res) => {
 // GET /api/admin/access/books
 export const getBooksForAdmin = async (req, res) => {
   try {
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 3;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 3);
     const { category, availability } = req.query;
 
     const filter = {};
@@ -304,13 +306,13 @@ export const getBooksForAdmin = async (req, res) => {
 // GET /api/admin/access/books/search
 export const searchBook = async (req, res) => {
   try {
-    const { query } = req.query;
-    if (!query || !String(query).trim()) {
+    const query = asTrimmedString(req.query.query);
+    if (!query) {
       return res.status(400).json({ success: false, message: "Search query is required" });
     }
 
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 3;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 3);
     const { filter, searchedFields } = buildBookSearchFilter(query);
 
     const totalMatches = await Book.countDocuments(filter);
@@ -323,7 +325,7 @@ export const searchBook = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      query: String(query).trim(),
+      query,
       searchedFields,
       count: books.length,
       totalMatches,
@@ -344,8 +346,8 @@ export const searchBook = async (req, res) => {
 // GET /api/admin/access/students
 export const getAllStudent = async (req, res) => {
   try {
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 3;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 3);
     const { department, Session } = req.query;
 
     const filter = { role: "user" };
@@ -381,8 +383,7 @@ export const getAllStudent = async (req, res) => {
 // POST /api/admin/access/students/search
 export const searchStudent = async (req, res) => {
   try {
-    const { regNo } = req.body;
-    console.log("Searching for student with regNo:", regNo);
+    const regNo = asTrimmedString(req.body?.regNo);
     if (!regNo) {
       return res.status(400).json({ success: false, message: "regNo is required" });
     }
@@ -411,15 +412,14 @@ export const searchStudent = async (req, res) => {
 // GET /api/admin/access/students/search?query=...
 export const searchRegisteredStudents = async (req, res) => {
   try {
-    const { query } = req.query;
-    if (!query || !String(query).trim()) {
+    const trimmedQuery = asTrimmedString(req.query.query);
+    if (!trimmedQuery) {
       return res.status(400).json({ success: false, message: "Search query is required" });
     }
 
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 10;
-    const trimmedQuery = String(query).trim();
-    const safe = trimmedQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 10);
+    const safe = escapeRegex(trimmedQuery);
 
     const filter = {
       role: "user",
@@ -696,8 +696,8 @@ export const getIssuedBook = async (req, res) => {
     if (regNo) filter.userRegNo = regNo;
     if (bookId) filter.book = bookId;
 
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 3;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 3);
 
     const totalIssued = await IssuedBook.countDocuments(filter);
     const issuedBooks = await IssuedBook.find(filter)
@@ -732,8 +732,8 @@ export const getAllReservation = async (req, res) => {
     if (regNo) filter.user_regNo = regNo;
     if (bookId) filter.book = bookId;
 
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 3;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 3);
 
     const totalReservations = await ReserveBook.countDocuments(filter);
     const reservations = await ReserveBook.find(filter)

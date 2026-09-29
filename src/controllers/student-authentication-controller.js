@@ -1,6 +1,8 @@
 import StudentAuthentication from "../models/student-authentication-model.js";
 import User from "../models/user-auth-models.js";
 import TemporaryRegNo from "../models/TemporaryRegNo.js";
+import { clampLimit, clampOffset, MAX_PAGE_SIZE } from "../utils/pagination.js";
+import { escapeRegex, asTrimmedString } from "../utils/escape-regex.js";
 
 export const createStudentAuthentication = async (req, res) => {
   try {
@@ -57,8 +59,8 @@ export const createStudentAuthentication = async (req, res) => {
 
 export const getAllStudentAuthentications = async (req, res) => {
   try {
-    const offset = parseInt(req.query.offset) || 0;
-    const limit = parseInt(req.query.limit) || 20;
+    const offset = clampOffset(req.query.offset);
+    const limit = clampLimit(req.query.limit, 20);
     const { department, Session } = req.query;
 
     const filter = {};
@@ -137,7 +139,7 @@ export const deleteStudentAuthentication = async (req, res) => {
 
 export const searchStudentAuthentication = async (req, res) => {
   try {
-    const { query } = req.body;
+    const query = asTrimmedString(req.body?.query);
     if (!query) {
       return res.status(400).json({
         success: false,
@@ -145,13 +147,14 @@ export const searchStudentAuthentication = async (req, res) => {
       });
     }
 
+    const safe = escapeRegex(query);
     const searchResults = await StudentAuthentication.find({
       $or: [
-        { name: { $regex: query, $options: "i" } },
-        { gmail: { $regex: query, $options: "i" } },
-        { regNo: { $regex: query, $options: "i" } },
+        { name: { $regex: safe, $options: "i" } },
+        { gmail: { $regex: safe, $options: "i" } },
+        { regNo: { $regex: safe, $options: "i" } },
       ],
-    });
+    }).limit(MAX_PAGE_SIZE);
 
     return res.status(200).json({
       success: true,

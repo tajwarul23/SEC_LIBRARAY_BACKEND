@@ -1,4 +1,4 @@
-import { verifyAuthToken, getAuthTokenFromCookie } from "../services/token-service.js";
+import { verifyAuthToken, getAuthTokenFromCookie, ADMIN_COOKIE } from "../services/token-service.js";
 import Admin from "../models/admin-model.js";
 
 /**
@@ -6,7 +6,7 @@ import Admin from "../models/admin-model.js";
  */
 export function authenticateAdmin(req, res, next) {
   // Step 1: Extract JWT token
-  const token = getAuthTokenFromCookie(req);
+  const token = getAuthTokenFromCookie(req, ADMIN_COOKIE);
   if (!token) {
     return res.status(401).json({ success: false, message: "Admin authentication required" });
   }

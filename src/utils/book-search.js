@@ -1,7 +1,7 @@
 /**
  * Book search helper for multi-field search queries (title, authors, category, isbn).
  */
-const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+import { escapeRegex } from "./escape-regex.js";
 
 const normalizeIsbn = (str) =>
   typeof str === "string" ? str.replace(/[-\s]/g, "").toUpperCase() : "";

@@ -255,8 +255,8 @@ const TextOnlyResponseSchema = z.object({
 
 const AssistantResponseSchema = z.union([BookResponseSchema, TextOnlyResponseSchema]);
 const chatCache = new NodeCache({ stdTTL: 60 * 60 * 1 }); //1hrs
-export async function askLibraryAssistant(userInput, threadId,) {
-  const cacheKey = threadId;
+// cacheKey must already be scoped to the user (see student-rag-controller.js)
+export async function askLibraryAssistant(userInput, cacheKey) {
   const query = (userInput || "").trim();
   if (!query) {
     throw new Error("Query input cannot be empty.");

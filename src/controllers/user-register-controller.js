@@ -1,7 +1,7 @@
 import { registerUserSchema } from "../validators/register-validator.js";
 import { loginUserSchema, changePasswordSchema } from "../validators/login-validator.js";
 import { registerUser, loginUser, changePassword as changePasswordService } from "../services/user-register-service.js";
-import { signAuthToken, setAuthCookie, clearAuthCookie } from "../services/token-service.js";
+import { signAuthToken, setAuthCookie, clearAuthCookie, STUDENT_COOKIE } from "../services/token-service.js";
 import User from "../models/user-auth-models.js";
 import { publicUser } from "../utils/public-user.js";
 import { handleAuthError as handleError } from "../utils/handle-auth-error.js";
@@ -25,7 +25,7 @@ export const login = async (req, res) => {
     const data = loginUserSchema.parse(req.body);
     const user = await loginUser(data);
     const token = signAuthToken(user);
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, STUDENT_COOKIE);
 
     return res.status(200).json({
       success: true,
@@ -39,7 +39,7 @@ export const login = async (req, res) => {
 
 export const logout = async (req, res) => {
   try {
-    clearAuthCookie(res);
+    clearAuthCookie(res, STUDENT_COOKIE);
     return res.status(200).json({
       success: true,
       message: "Logged out successfully",

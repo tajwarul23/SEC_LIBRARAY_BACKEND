@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import User from "../models/user-auth-models.js";
 import { Transaction } from "../models/transaction-model.js";
 import { sslcz } from "../config/sslcommerz.js";
+import { clampLimit, clampOffset } from "../utils/pagination.js";
 import { createFineClearedNotification } from "./notification-service.js";
 
 const CURRENCY = "BDT";
@@ -160,8 +161,8 @@ async function applyFineForTransaction(transaction) {
 }
 
 export async function getMyPaymentHistory(userId, query = {}) {
-  const offset = Number.parseInt(query.offset ?? "0", 10);
-  const limit = Math.min(Number.parseInt(query.limit ?? "20", 10), 100);
+  const offset = clampOffset(query.offset);
+  const limit = clampLimit(query.limit, 20);
 
   const [totalCount, transactions] = await Promise.all([
     Transaction.countDocuments({ user: userId }),
@@ -188,8 +189,8 @@ export async function getMyPaymentStatus(userId, tran_id) {
 }
 
 export async function getAllPaymentsForAdmin(query = {}) {
-  const offset = Number.parseInt(query.offset ?? "0", 10);
-  const limit = Math.min(Number.parseInt(query.limit ?? "20", 10), 100);
+  const offset = clampOffset(query.offset);
+  const limit = clampLimit(query.limit, 20);
   const { regNo, status } = query;
 
   const filter = {};

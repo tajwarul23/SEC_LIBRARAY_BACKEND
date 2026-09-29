@@ -1,4 +1,4 @@
-import { verifyAuthToken, getAuthTokenFromCookie } from "../services/token-service.js";
+import { verifyAuthToken, getAuthTokenFromCookie, STUDENT_COOKIE } from "../services/token-service.js";
 import User from "../models/user-auth-models.js";
 import TemporaryRegNo from "../models/TemporaryRegNo.js";
 
@@ -14,7 +14,7 @@ import TemporaryRegNo from "../models/TemporaryRegNo.js";
  */
 export async function authenticate(req, res, next) {
   // Step 1: Extract JWT token
-  const token = getAuthTokenFromCookie(req);
+  const token = getAuthTokenFromCookie(req, STUDENT_COOKIE);
   if (!token) {
     return res.status(401).json({ success: false, message: "Authentication required" });
   }

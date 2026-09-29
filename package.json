@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
-    "start": "node server.js"
+    "start": "node server.js",
+    "seed:admin": "node scripts/seed-admin.js"
   },
   "keywords": [],
   "author": "",

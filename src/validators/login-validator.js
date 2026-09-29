@@ -14,5 +14,6 @@ const passwordRules = z
   .regex(/[0-9]/, "Password must contain a number");
 
 export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
   newPassword: passwordRules,
 });
