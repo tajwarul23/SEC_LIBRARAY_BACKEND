@@ -1,4 +1,4 @@
-import { askLibraryAssistant, indexRagDocuments } from "../services/student-rag-service.js";
+import { askLibraryAssistant, indexRagDocuments, isRagConfigured } from "../services/student-rag-service.js";
 
 /**
  * Smart Search (RAG Chatbot Controller)
@@ -21,6 +21,13 @@ export const getSmartSearchResults = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "A valid threadId is required.",
+      });
+    }
+
+    if (!isRagConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: "The library assistant isn't available right now.",
       });
     }
 

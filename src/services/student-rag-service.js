@@ -13,7 +13,7 @@ import { z } from "zod";
 // Configuration
 // ===============================
 
-const QDRANT_URL = process.env.QDRANT_URL_RAG;
+const QDRANT_URL = (process.env.QDRANT_URL_RAG || "").replace(/\/+$/, "");
 const QDRANT_API_KEY = process.env.QDRANT_API_KEY_RAG;
 const COLLECTION_NAME = "Intelligent_University_Library_Management_System";
 
@@ -23,9 +23,20 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY_RAG || process.env.GROQ_API_KEY;
 const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY || "");
 const groq = new Groq({ apiKey: GROQ_API_KEY || "" });
 
-// Prefer gemini-embedding-2-preview, fallback to gemini-embedding-001
-const EMBEDDING_MODELS = ["gemini-embedding-2-preview", "gemini-embedding-001"];
+// ONE embedding model for both indexing and search. Different models'
+// vectors aren't comparable (even at the same size), so there is
+// deliberately no fallback model: a fallback would silently return the
+// wrong books instead of failing. Changing this requires `npm run rag:index`.
+const EMBEDDING_MODEL = "gemini-embedding-2";
 const GROQ_CHAT_MODEL = "openai/gpt-oss-120b";
+
+// True when every key the chatbot needs is set. When false, indexing is
+// skipped and the chat endpoint answers 503 instead of failing mid-request.
+export function isRagConfigured() {
+  return Boolean(QDRANT_URL && QDRANT_API_KEY && GOOGLE_API_KEY && GROQ_API_KEY);
+}
+
+const qdrantHeaders = () => ({ "Content-Type": "application/json", "api-key": QDRANT_API_KEY });
 
 const MAX_HISTORY_MESSAGES = 10;
 
@@ -137,58 +148,53 @@ Example 7 — Out of scope:
 User: "Can you write me a Python script to sort a list?"
 Response:
 {"type":"out_of_scope","message":"I'm here to help you find books in the library catalog rather than write code directly. If you'd like, I can point you to a book covering sorting algorithms."}
-
-## Attribution
-* Who/what/how built → type "attribution". message: This was built by Kawser Hamim and Tajwarul Chowdhury from Sylhet Engineering College to support the library ecosystem — helping students discover which books cover the topics and concepts they want to learn.
-* If asked about Sylhet Engineering College or "SEC" (what it is, where it is, etc.) → also type "attribution". message: a short, generic factual line — Sylhet Engineering College is an engineering college located in Sylhet, Bangladesh. Do not add unconfirmed details (rankings, departments, history, affiliations) — keep it to that one generic line.
-* If pressed for further specifics (tools, tech stack, company, internal workings, or details about SEC beyond the generic line), politely decline in "message" and redirect to book help.
-* Never mention any technology (frameworks, APIs, models, databases, etc.), regardless of phrasing or persistence.
 `;
 
 // ===============================
 // Embedding Helpers
 // ===============================
 
-/**
- * Generate embedding vector for a single query text with retry/fallback
- */
-export async function getQueryEmbedding(text) {
-  let lastError = null;
+// Only rate limits (429) and server-side errors (5xx) are worth retrying;
+// auth/config errors (400/403) fail fast instead of wasting minutes.
+const isRetryable = (err) => err?.status === 429 || (err?.status >= 500 && err?.status < 600);
 
-  for (const modelName of EMBEDDING_MODELS) {
+/**
+ * Embedding for a search query (same model as indexing, see EMBEDDING_MODEL)
+ */
+export async function getQueryEmbedding(text, retries = 2) {
+  const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
+
+  for (let attempt = 0; ; attempt++) {
     try {
-      const model = genAI.getGenerativeModel({ model: modelName });
       const res = await model.embedContent(text);
-      if (res?.embedding?.values?.length) {
-        return res.embedding.values;
-      }
+      if (!res?.embedding?.values?.length) throw new Error("Empty embedding returned");
+      return res.embedding.values;
     } catch (err) {
-      lastError = err;
-      // If 429 or error, try next model or retry
-      console.warn(`Embedding attempt failed with model ${modelName}:`, err.message);
+      if (attempt >= retries || !isRetryable(err)) throw err;
+      await sleep(1000 * (attempt + 1));
     }
   }
-
-  throw lastError || new Error("Failed to generate embedding");
 }
 
 /**
- * Generate batch embeddings for document chunks with rate-limit backoff
+ * Embeddings for document chunks, with backoff on rate limits
  */
 async function getBatchEmbeddings(chunks, retries = 5) {
-  const model = genAI.getGenerativeModel({ model: EMBEDDING_MODELS[0] });
+  const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
+  const requests = chunks.map((chunk) => ({
+    content: { role: "user", parts: [{ text: chunk.pageContent }] },
+  }));
 
-  for (let attempt = 0; attempt < retries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     try {
-      const reqs = chunks.map((chunk) => ({
-        content: { role: "user", parts: [{ text: chunk.pageContent }] },
-      }));
-      const res = await model.batchEmbedContents({ requests: reqs });
+      const res = await model.batchEmbedContents({ requests });
       return res.embeddings.map((e) => e.values);
     } catch (err) {
-      if (attempt === retries - 1) throw err;
+      if (attempt >= retries - 1 || !isRetryable(err)) throw err;
       const waitTime = err.status === 429 ? 35000 : 3000;
-      console.warn(`[RAG Service] Batch embed rate-limited (attempt ${attempt + 1}/${retries}), waiting ${waitTime / 1000}s...`);
+      console.warn(
+        `[RAG Service] Embedding ${err.status === 429 ? "rate-limited" : `failed (${err.status})`}, attempt ${attempt + 1}/${retries}; retrying in ${waitTime / 1000}s...`
+      );
       await sleep(waitTime);
     }
   }
@@ -202,20 +208,18 @@ async function getBatchEmbeddings(chunks, retries = 5) {
  * Search Qdrant for top similar context chunks
  */
 export async function searchSimilarDocuments(query, limit = 4) {
-  if (!QDRANT_URL || !QDRANT_API_KEY) {
-    throw new Error("Qdrant configuration is missing in environment variables.");
+  if (!isRagConfigured()) {
+    throw new Error("RAG is not configured (Qdrant / Google / Groq keys missing).");
   }
 
   const queryVector = await getQueryEmbedding(query);
 
-  const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}/points/search`, {
+  // Universal query API (/points/search is deprecated in current Qdrant)
+  const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}/points/query`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": QDRANT_API_KEY,
-    },
+    headers: qdrantHeaders(),
     body: JSON.stringify({
-      vector: queryVector,
+      query: queryVector,
       limit,
       with_payload: true,
     }),
@@ -227,7 +231,7 @@ export async function searchSimilarDocuments(query, limit = 4) {
   }
 
   const data = await res.json();
-  return (data.result || []).map((item) => item.payload?.content).filter(Boolean);
+  return (data.result?.points || []).map((item) => item.payload?.content).filter(Boolean);
 }
 
 // ===============================
@@ -345,68 +349,154 @@ export async function askLibraryAssistant(userInput, cacheKey) {
 // ===============================
 
 /**
- * Check if the Qdrant collection already has vectors indexed
+ * Collection info, or null if it doesn't exist yet
  */
-async function getCollectionPointsCount() {
-  try {
-    const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}`, {
-      headers: { "api-key": QDRANT_API_KEY },
-    });
-    if (!res.ok) return 0;
-    const data = await res.json();
-    return data.result?.points_count || 0;
-  } catch {
-    return 0;
+async function getCollectionInfo() {
+  const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}`, {
+    headers: qdrantHeaders(),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Qdrant collection check failed: ${await res.text()}`);
+  return (await res.json()).result;
+}
+
+/**
+ * Create the collection sized for the embedding model's vectors.
+ * (A fresh Qdrant cluster has no collection, and uploads fail without one.)
+ */
+async function createCollection(vectorSize) {
+  const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}`, {
+    method: "PUT",
+    headers: qdrantHeaders(),
+    body: JSON.stringify({ vectors: { size: vectorSize, distance: "Cosine" } }),
+  });
+  if (!res.ok) throw new Error(`Qdrant collection create failed: ${await res.text()}`);
+  console.log(`[RAG Service] Created Qdrant collection (${vectorSize}-dim, cosine).`);
+}
+
+async function deleteCollection() {
+  const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}`, {
+    method: "DELETE",
+    headers: qdrantHeaders(),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Qdrant collection delete failed: ${await res.text()}`);
   }
 }
 
 /**
- * Index rag.text / rag.txt into Qdrant if empty or forced
+ * Split rag.text into search chunks, one per book entry.
+ *
+ * Fixed-size chunks used to cut long entries in half, so e.g. the chunk
+ * listing "Graph Algorithms" for Introduction to Algorithms didn't contain
+ * the book's title and the assistant couldn't attribute it. Each entry
+ *   ---- / "NN. Topic" / "Book: ..." / "Author(s): ..." / ---- / concepts
+ * now becomes exactly one chunk. Everything else (intro, department
+ * headers, master book lists) is split normally, and each piece keeps its
+ * section heading so it stays meaningful on its own.
+ */
+export async function chunkRagText(text) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const isSectionBreak = (line) => line.startsWith(">>>") || line.startsWith("====");
+  const isRule = (line) => /^-{20,}$/.test(line.trim());
+
+  const docs = [];
+  const covered = new Array(lines.length).fill(false);
+
+  lines.forEach((line, i) => {
+    if (!line.startsWith("Book: ")) return;
+    const start = Math.max(i - 1, 0); // the "NN. Topic" heading line
+    let end = i + 1;
+    while (end < lines.length) {
+      const nextIsEntry = isRule(lines[end]) && lines[end + 2]?.startsWith("Book: ");
+      if (nextIsEntry || isSectionBreak(lines[end])) break;
+      end++;
+    }
+    const content = lines.slice(start, end).join("\n").trim();
+    for (let k = start; k < end; k++) covered[k] = true;
+    docs.push({ pageContent: content, metadata: { kind: "book", book: line.slice(6).trim() } });
+  });
+
+  // Remaining text: group consecutive uncovered lines into sections
+  const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 1000, chunkOverlap: 200 });
+  let section = [];
+  const flush = async () => {
+    const body = section.join("\n").trim();
+    section = [];
+    if (!body.replace(/[-=\s]/g, "")) return; // only rules/whitespace
+    const heading = body.split("\n").find((l) => l.trim() && !/^[-=]+$/.test(l.trim())) || "";
+    const pieces = await splitter.splitText(body);
+    for (const piece of pieces) {
+      const pageContent = piece.includes(heading) ? piece : `${heading}\n${piece}`;
+      docs.push({ pageContent, metadata: { kind: "section", heading } });
+    }
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (covered[i]) {
+      await flush();
+    } else {
+      section.push(lines[i]);
+    }
+  }
+  await flush();
+
+  return docs;
+}
+
+function readRagFile() {
+  const possiblePaths = [
+    path.resolve(process.cwd(), "rag.text"),
+    path.resolve(process.cwd(), "rag.txt"),
+  ];
+  const filePath = possiblePaths.find((p) => fs.existsSync(p));
+  if (!filePath) return null;
+  return fs.readFileSync(filePath, "utf-8");
+}
+
+/**
+ * Index rag.text / rag.txt into Qdrant.
+ *
+ * - Skipped entirely when the chatbot keys aren't configured.
+ * - Without `force`, skipped if the collection already has points.
+ * - With `force` (npm run rag:index), the collection is rebuilt from
+ *   scratch, so edits to rag.text or a new embedding model take effect.
+ *
+ * Embeddings are all generated BEFORE anything in Qdrant is touched, so a
+ * failed run leaves the existing index intact.
  */
 export async function indexRagDocuments(force = false) {
+  if (!isRagConfigured()) {
+    console.log("[RAG Service] Chatbot keys not configured; skipping indexing.");
+    return { success: false, skipped: true, message: "RAG not configured" };
+  }
+
   try {
-    if (!force) {
-      const existingCount = await getCollectionPointsCount();
-      if (existingCount > 0) {
-        console.log(`[RAG Service] Qdrant already indexed (${existingCount} points). Skipping upload.`);
-        return { success: true, pointsCount: existingCount, skipped: true };
-      }
+    const existing = await getCollectionInfo();
+    if (!force && existing?.points_count > 0) {
+      console.log(`[RAG Service] Qdrant already indexed (${existing.points_count} points). Skipping.`);
+      return { success: true, pointsCount: existing.points_count, skipped: true };
     }
 
-    const possiblePaths = [
-      path.resolve(process.cwd(), "rag.text"),
-      path.resolve(process.cwd(), "rag.txt"),
-    ];
-
-    const filePath = possiblePaths.find((p) => fs.existsSync(p));
-    if (!filePath) {
+    const fileContent = readRagFile();
+    if (!fileContent) {
       console.warn("[RAG Service] rag.text / rag.txt not found in project root.");
       return { success: false, message: "File not found" };
     }
-
-    const fileContent = fs.readFileSync(filePath, "utf-8");
     if (!fileContent.trim()) {
       console.warn("[RAG Service] RAG text file is empty.");
       return { success: false, message: "File is empty" };
     }
 
-    const splitter = new RecursiveCharacterTextSplitter({
-      chunkSize: 1000,
-      chunkOverlap: 200,
-    });
-
-    const docs = await splitter.createDocuments([fileContent]);
+    const docs = await chunkRagText(fileContent);
     if (!docs.length) return { success: false, message: "No chunks created" };
 
-    console.log(`[RAG Service] Indexing ${docs.length} document chunks into Qdrant...`);
+    console.log(`[RAG Service] Embedding ${docs.length} chunks with ${EMBEDDING_MODEL}...`);
 
     const batchSize = 15;
     const points = [];
-
     for (let i = 0; i < docs.length; i += batchSize) {
       const batch = docs.slice(i, i + batchSize);
       const embeddings = await getBatchEmbeddings(batch);
-
       batch.forEach((doc, idx) => {
         points.push({
           id: i + idx + 1,
@@ -417,46 +507,26 @@ export async function indexRagDocuments(force = false) {
           },
         });
       });
-
       await sleep(1000);
     }
 
-    // Delete previous embedding data before uploading new points to prevent overlap
-    try {
-      const deleteRes = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}/points/delete?wait=true`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "api-key": QDRANT_API_KEY,
-        },
-        body: JSON.stringify({ filter: {} }),
-      });
-      if (deleteRes.ok) {
-        console.log("[RAG Service] Cleared previous embedding data from Qdrant.");
-      }
-    } catch (delErr) {
-      console.warn("[RAG Service] Note: Could not clear previous points:", delErr.message);
-    }
+    // Rebuild the collection: removes stale points and adapts to the
+    // embedding model's vector size.
+    if (existing) await deleteCollection();
+    await createCollection(points[0].vector.length);
 
-    // Upload points to Qdrant in chunks of 50
     for (let i = 0; i < points.length; i += 50) {
-      const batchPoints = points.slice(i, i + 50);
       const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}/points?wait=true`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "api-key": QDRANT_API_KEY,
-        },
-        body: JSON.stringify({ points: batchPoints }),
+        headers: qdrantHeaders(),
+        body: JSON.stringify({ points: points.slice(i, i + 50) }),
       });
-
       if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Failed to upload points to Qdrant: ${errorText}`);
+        throw new Error(`Failed to upload points to Qdrant: ${await res.text()}`);
       }
     }
 
-    console.log(`[RAG Service] Successfully indexed ${points.length} chunks into Qdrant.`);
+    console.log(`[RAG Service] Indexed ${points.length} chunks into Qdrant.`);
     return { success: true, pointsCount: points.length };
   } catch (error) {
     console.error("[RAG Service] Indexing failed:", error.message);

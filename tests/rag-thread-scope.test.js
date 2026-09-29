@@ -12,6 +12,7 @@ const askLibraryAssistant = jest.fn(async () => ({ type: "conversation", message
 jest.unstable_mockModule("../src/services/student-rag-service.js", () => ({
   askLibraryAssistant,
   indexRagDocuments: jest.fn(),
+  isRagConfigured: () => true,
 }));
 
 const { getSmartSearchResults } = await import("../src/controllers/student-rag-controller.js");
