@@ -1,6 +1,7 @@
 import StudentAuthentication from "../models/student-authentication-model.js";
 import User from "../models/user-auth-models.js";
 import TemporaryRegNo from "../models/TemporaryRegNo.js";
+import { countActiveBooks } from "../services/borrow-limit-service.js";
 import { clampLimit, clampOffset, MAX_PAGE_SIZE } from "../utils/pagination.js";
 import { escapeRegex, asTrimmedString } from "../utils/escape-regex.js";
 
@@ -114,7 +115,26 @@ export const deleteStudentAuthentication = async (req, res) => {
 
     const findUserByRegNo = await User.findOne({ regNo: finds.regNo });
 
-    await TemporaryRegNo.create({ regNo: finds.regNo });
+    // Don't delete a student who still has library items or an unpaid fine:
+    // their loans/reservations would be orphaned and the fine lost.
+    if (findUserByRegNo) {
+      const active = await countActiveBooks(findUserByRegNo._id);
+      const fine = findUserByRegNo.fine || 0;
+      if (active.total > 0 || fine > 0) {
+        return res.status(409).json({
+          success: false,
+          message: `Can't delete: student has ${active.issued} book(s) issued, ${active.reserved} reserved and a fine of ৳${fine}. Clear these first.`,
+        });
+      }
+    }
+
+    // Upsert: deleting the same regNo twice within the block window used to
+    // fail on the unique index and leave the student half-deleted.
+    await TemporaryRegNo.updateOne(
+      { regNo: finds.regNo },
+      { $set: { expiresAt: new Date(Date.now() + 60 * 60 * 1000) } },
+      { upsert: true }
+    );
 
     if (findUserByRegNo) {
       await User.findByIdAndDelete(findUserByRegNo._id);

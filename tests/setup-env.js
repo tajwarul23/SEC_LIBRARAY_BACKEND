@@ -21,6 +21,10 @@ process.env.GOOGLE_API_KEY = "";
 process.env.GROQ_API_KEY_RAG = "";
 process.env.GROQ_API_KEY = "";
 
+// Late fines "launched" long ago, so test results don't depend on the date
+// the tests run (the real default is the launch day).
+process.env.LATE_FINES_START_DATE = "2000-01-01T00:00:00Z";
+
 process.env.SSLCOMMERZ_STORE_ID = "test-store";
 process.env.SSLCOMMERZ_STORE_PASSWORD = "test-store-password";
 process.env.SSLCOMMERZ_IS_LIVE = "false";

@@ -160,6 +160,16 @@ async function applyFineForTransaction(transaction) {
   }
 }
 
+// Called from the fail/cancel browser redirects. Only a still-PENDING
+// transaction is closed, and never a VALID one: if a (spoofed or early)
+// redirect closes it and SSLCommerz later validates the payment, the IPN
+// handler's `status: { $ne: "VALID" }` claim still marks it VALID and
+// clears the fine.
+export async function closePendingTransaction(tran_id, status) {
+  if (typeof tran_id !== "string" || !tran_id) return;
+  await Transaction.updateOne({ tran_id, status: "PENDING" }, { $set: { status } });
+}
+
 export async function getMyPaymentHistory(userId, query = {}) {
   const offset = clampOffset(query.offset);
   const limit = clampLimit(query.limit, 20);

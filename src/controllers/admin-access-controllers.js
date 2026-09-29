@@ -2,6 +2,9 @@ import { Book } from "../models/book-model.js";
 import User from "../models/user-auth-models.js";
 import { ReserveBook } from "../models/reserve-book.js";
 import { IssuedBook } from "../models/issuebook-model.js";
+import { Waitlist } from "../models/waitlist-model.js";
+import { chargeLateFine } from "../services/late-fine-service.js";
+import { countActiveBooks } from "../services/borrow-limit-service.js";
 import { enqueueWaitlistAvailability } from "../queues/waitlist-queue.js";
 import { buildBookSearchFilter } from "../utils/book-search.js";
 import { clampLimit, clampOffset } from "../utils/pagination.js";
@@ -169,17 +172,40 @@ export const updateBook = async (req, res) => {
       setOps.availableCopies = availableCopies;
     }
 
+    // Copy counts change while an admin has the edit form open (students
+    // reserve, books get returned), so they're never blindly overwritten:
+    //  - totalCopies alone: availableCopies moves by the same amount ($inc),
+    //    e.g. adding 2 new copies adds 2 available copies.
+    //  - availableCopies given explicitly: applied only if stock hasn't
+    //    changed since the form was loaded (compare-and-set), else 409.
     let preUpdateAvailableCopies = null;
+    const stockFilter = {};
+    const incOps = {};
     if (setOps.availableCopies !== undefined || setOps.totalCopies !== undefined) {
       const existing = await Book.findById(id).select("totalCopies availableCopies");
       if (!existing) {
         return res.status(404).json({ success: false, message: "Book not found" });
       }
       preUpdateAvailableCopies = existing.availableCopies;
-      const nextTotal = setOps.totalCopies !== undefined ? setOps.totalCopies : existing.totalCopies;
-      const nextAvailable = setOps.availableCopies !== undefined ? setOps.availableCopies : existing.availableCopies;
-      if (nextAvailable > nextTotal) {
-        return res.status(400).json({ success: false, message: "availableCopies cannot exceed totalCopies" });
+      stockFilter.totalCopies = existing.totalCopies;
+      stockFilter.availableCopies = existing.availableCopies;
+
+      if (setOps.availableCopies === undefined) {
+        const delta = setOps.totalCopies - existing.totalCopies;
+        if (existing.availableCopies + delta < 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Can't reduce total below the ${existing.totalCopies - existing.availableCopies} copies currently issued or reserved`,
+          });
+        }
+        delete setOps.totalCopies;
+        if (delta !== 0) incOps.totalCopies = delta;
+        if (delta !== 0) incOps.availableCopies = delta;
+      } else {
+        const nextTotal = setOps.totalCopies !== undefined ? setOps.totalCopies : existing.totalCopies;
+        if (setOps.availableCopies > nextTotal) {
+          return res.status(400).json({ success: false, message: "availableCopies cannot exceed totalCopies" });
+        }
       }
     }
 
@@ -198,10 +224,13 @@ export const updateBook = async (req, res) => {
       if (coverImage === null) {
         unsetOps["coverImage"] = "";
       } else if (typeof coverImage === "object") {
-        if (has("url")) {
+        // Check the keys on coverImage itself (this used to check req.body,
+        // so cover edits were silently ignored)
+        const coverHas = (k) => Object.prototype.hasOwnProperty.call(coverImage, k);
+        if (coverHas("url")) {
           setOps["coverImage.url"] = typeof coverImage.url === "string" && coverImage.url.trim() ? coverImage.url.trim() : null;
         }
-        if (has("publicId")) {
+        if (coverHas("publicId")) {
           setOps["coverImage.publicId"] = typeof coverImage.publicId === "string" && coverImage.publicId.trim() ? coverImage.publicId.trim() : null;
         }
       } else {
@@ -212,7 +241,11 @@ export const updateBook = async (req, res) => {
       }
     }
 
-    if (Object.keys(setOps).length === 0 && Object.keys(unsetOps).length === 0) {
+    if (
+      Object.keys(setOps).length === 0 &&
+      Object.keys(unsetOps).length === 0 &&
+      Object.keys(incOps).length === 0
+    ) {
       const current = await Book.findById(id);
       if (!current) return res.status(404).json({ success: false, message: "Book not found" });
       return res.status(200).json({ success: true, message: "No changes applied", book: current });
@@ -221,22 +254,26 @@ export const updateBook = async (req, res) => {
     const updateDoc = {};
     if (Object.keys(setOps).length) updateDoc.$set = setOps;
     if (Object.keys(unsetOps).length) updateDoc.$unset = unsetOps;
+    if (Object.keys(incOps).length) updateDoc.$inc = incOps;
 
-    const book = await Book.findByIdAndUpdate(id, updateDoc, {
+    const book = await Book.findOneAndUpdate({ _id: id, ...stockFilter }, updateDoc, {
       new: true,
       runValidators: true,
       context: "query",
     });
 
-    if (!book) return res.status(404).json({ success: false, message: "Book not found" });
+    if (!book) {
+      if (Object.keys(stockFilter).length && (await Book.exists({ _id: id }))) {
+        return res.status(409).json({
+          success: false,
+          message: "Stock changed while you were editing (a copy was reserved, issued or returned). Reload and try again.",
+        });
+      }
+      return res.status(404).json({ success: false, message: "Book not found" });
+    }
 
-    if (
-      has("availableCopies") &&
-      typeof availableCopies === "number" &&
-      typeof preUpdateAvailableCopies === "number" &&
-      availableCopies > preUpdateAvailableCopies
-    ) {
-      enqueueWaitlistAvailability(book._id, availableCopies - preUpdateAvailableCopies);
+    if (typeof preUpdateAvailableCopies === "number" && book.availableCopies > preUpdateAvailableCopies) {
+      enqueueWaitlistAvailability(book._id, book.availableCopies - preUpdateAvailableCopies);
     }
 
     return res.status(200).json({ success: true, message: "Book updated", book });
@@ -258,10 +295,31 @@ export const updateBook = async (req, res) => {
 export const deleteBook = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Deleting a book that's out on loan or held for a student would leave
+    // those records pointing at nothing, so require them to be closed first.
+    const [activeLoans, pendingReservations] = await Promise.all([
+      IssuedBook.countDocuments({ book: id, returnedAt: null }),
+      ReserveBook.countDocuments({ book: id, status: "pending" }),
+    ]);
+    if (activeLoans > 0 || pendingReservations > 0) {
+      return res.status(409).json({
+        success: false,
+        message: `Can't delete: ${activeLoans} copy/copies still issued and ${pendingReservations} pending reservation(s). Return or let them expire first.`,
+      });
+    }
+
     const book = await Book.findByIdAndDelete(id);
     if (!book) return res.status(404).json({ success: false, message: "Book not found" });
+
+    // Nobody can be waiting for a book that no longer exists
+    await Waitlist.deleteMany({ book: book._id });
+
     return res.status(200).json({ success: true, message: "Book deleted" });
   } catch (error) {
+    if (error?.name === "CastError") {
+      return res.status(400).json({ success: false, message: "Invalid book id" });
+    }
     return res.status(500).json({ success: false, message: "Error deleting book", error: error.message });
   }
 };
@@ -520,9 +578,10 @@ export const issueReservedBook = async (req, res) => {
 
     // Note: availableCopies was already decremented when the book was reserved.
 
-    reservation.status = "issued";
-    await reservation.save();
-
+    // Create the loan first, then claim the reservation atomically. If the
+    // reservation was expired by the cron (or issued by another click) in
+    // the meantime, undo the loan — never leave a reservation marked
+    // "issued" with no loan behind it, or a loan without its copy.
     const issuedBook = await IssuedBook.create({
       book: book._id,
       bookTitle: book.title,
@@ -535,12 +594,28 @@ export const issueReservedBook = async (req, res) => {
       reservation: reservation._id,
     });
 
+    const claimed = await ReserveBook.findOneAndUpdate(
+      { _id: reservation._id, status: "pending", expiresAt: { $gt: new Date() } },
+      { $set: { status: "issued" } },
+      { new: true }
+    );
+    if (!claimed) {
+      await IssuedBook.deleteOne({ _id: issuedBook._id });
+      return res.status(409).json({
+        success: false,
+        message: "Reservation expired or was already issued. Refresh and try again.",
+      });
+    }
+
     return res.status(201).json({
       success: true,
       message: "Book issued successfully",
       data: issuedBook,
     });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ success: false, message: "This reservation is already being issued" });
+    }
     return res.status(500).json({ success: false, message: "Error issuing book", error: error.message });
   }
 };
@@ -596,12 +671,12 @@ export const issueBookDirect = async (req, res) => {
       });
     }
 
-    const borrowedCount = await IssuedBook.countDocuments({
-      user: user._id,
-      status: { $in: ["borrowed", "overdue"] },
-    });
-    if (borrowedCount >= 3) {
-      return res.status(409).json({ success: false, message: "Borrowing limit (3) reached for this student" });
+    const active = await countActiveBooks(user._id);
+    if (active.total >= active.limit) {
+      return res.status(409).json({
+        success: false,
+        message: `Limit (${active.limit}) reached for this student: ${active.issued} issued, ${active.reserved} reserved`,
+      });
     }
 
     // Atomically decrement availableCopies if > 0
@@ -653,16 +728,28 @@ export const issueBookDirect = async (req, res) => {
 export const returnIssuedBook = async (req, res) => {
   try {
     const { issuedId } = req.params;
-    const issuedBook = await IssuedBook.findById(issuedId);
+    const existing = await IssuedBook.findById(issuedId);
 
-    if (!issuedBook) return res.status(404).json({ success: false, message: "Issued book not found" });
-    if (issuedBook.status === "returned") {
+    if (!existing) return res.status(404).json({ success: false, message: "Issued book not found" });
+    if (existing.status === "returned") {
       return res.status(400).json({ success: false, message: "Book already returned" });
     }
 
-    issuedBook.status = "returned";
-    issuedBook.returnedAt = new Date();
-    await issuedBook.save();
+    // Charge any overdue days not yet billed (e.g. the server was asleep
+    // when the daily charge would have run). Idempotent.
+    const now = new Date();
+    const lateFineCharged = await chargeLateFine(existing, now);
+
+    // Atomic claim: a double-clicked Return can only succeed once, so the
+    // copy is only put back on the shelf once.
+    const issuedBook = await IssuedBook.findOneAndUpdate(
+      { _id: existing._id, status: { $ne: "returned" } },
+      { $set: { status: "returned", returnedAt: now } },
+      { new: true }
+    );
+    if (!issuedBook) {
+      return res.status(400).json({ success: false, message: "Book already returned" });
+    }
 
     const book = await Book.findByIdAndUpdate(
       issuedBook.book,
@@ -674,11 +761,17 @@ export const returnIssuedBook = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Book returned successfully",
+      message: lateFineCharged > 0
+        ? `Book returned. Late fine of ৳${lateFineCharged} added to the student's account.`
+        : "Book returned successfully",
       issuedBook,
       book,
+      lateFineCharged,
     });
   } catch (error) {
+    if (error?.name === "CastError") {
+      return res.status(400).json({ success: false, message: "Invalid issued book id" });
+    }
     return res.status(500).json({ success: false, message: "Error returning book", error: error.message });
   }
 };
