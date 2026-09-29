@@ -51,6 +51,10 @@ export const logout = async (req, res) => {
 
 export const me = async (req, res) => {
   try {
+    if (req.user.isGuest) {
+      return res.status(200).json({ success: true, data: { user: publicUser(req.user) } });
+    }
+
     const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found" });

@@ -1,4 +1,10 @@
 import { verifyAuthToken, getAuthTokenFromCookie, STUDENT_COOKIE } from "../services/token-service.js";
+import {
+  isGuestPayload,
+  isGuestRequestAllowed,
+  guestStudentProfile,
+  GUEST_READ_ONLY_MESSAGE,
+} from "../services/guest-service.js";
 import User from "../models/user-auth-models.js";
 import TemporaryRegNo from "../models/TemporaryRegNo.js";
 
@@ -24,6 +30,20 @@ export async function authenticate(req, res, next) {
   try {
     payload = verifyAuthToken(token);
   } catch {
+    return res.status(401).json({ success: false, message: "Invalid or expired token" });
+  }
+
+  // Guests have no database record and may only read (plus logout/chatbot)
+  if (isGuestPayload(payload, "student")) {
+    if (!isGuestRequestAllowed(req, "student")) {
+      return res.status(403).json({ success: false, message: GUEST_READ_ONLY_MESSAGE });
+    }
+    req.user = guestStudentProfile(payload.guestId);
+    return next();
+  }
+
+  // Any other role (e.g. an admin token) is not a student session
+  if (payload.role !== "user") {
     return res.status(401).json({ success: false, message: "Invalid or expired token" });
   }
 

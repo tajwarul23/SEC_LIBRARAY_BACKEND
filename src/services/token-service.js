@@ -33,8 +33,8 @@ function cookieOptions() {
   };
 }
 
-export function setAuthCookie(res, token, cookieName) {
-  res.cookie(cookieName, token, { ...cookieOptions(), maxAge: SESSION_TTL_MS });
+export function setAuthCookie(res, token, cookieName, maxAge = SESSION_TTL_MS) {
+  res.cookie(cookieName, token, { ...cookieOptions(), maxAge });
 }
 
 export function clearAuthCookie(res, cookieName) {

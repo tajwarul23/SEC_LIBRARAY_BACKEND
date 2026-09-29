@@ -65,3 +65,30 @@ export const paymentPublicRateLimiter = rateLimit({
     message: "Too many payment requests. Please try again shortly.",
   },
 });
+// One-click guest logins create no DB records, but cap them per IP anyway.
+export const guestLoginRateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTests,
+  message: {
+    success: false,
+    message: "Too many guest sign-ins. Please try again shortly.",
+  },
+});
+
+// Guests share the chatbot's API quota with real students, so each guest
+// session gets a tighter chatbot limit (keyed by its random guestId).
+export const guestRagRateLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => skipInTests() || !req.user?.isGuest,
+  keyGenerator: (req) => `guest:${req.user.guestId}`,
+  message: {
+    success: false,
+    message: "Guests can ask 5 questions per minute. Please wait a moment.",
+  },
+});

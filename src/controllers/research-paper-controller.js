@@ -208,6 +208,15 @@ export const createResearchPaper = async (req, res) => {
 export const getMyResearchPapers = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
+    // Guests have no papers. Without this, { "submittedBy.userId": null }
+    // would match admin-created papers (which have no submitter).
+    if (!userId) {
+      return res.status(200).json({
+        success: true,
+        pagination: { currentPage: 1, limit: 0, totalPapers: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false },
+        papers: [],
+      });
+    }
     const { status } = req.query;
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);
@@ -471,7 +480,8 @@ export const getResearchPaperById = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user?.id || req.user?._id;
-    const isAdmin = req.user?.role === "admin";
+    // Admin-portal guests see what an admin sees (read-only)
+    const isAdmin = req.user?.role === "admin" || Boolean(req.user?.isAdminGuest);
 
     let filter = { _id: id };
 
@@ -528,7 +538,8 @@ export const searchResearchPapers = async (req, res) => {
     const skip = (currentPage - 1) * perPage;
 
     const userId = req.user?.id || req.user?._id;
-    const isAdmin = req.user?.role === "admin";
+    // Admin-portal guests see what an admin sees (read-only)
+    const isAdmin = req.user?.role === "admin" || Boolean(req.user?.isAdminGuest);
 
     const filter = {};
 

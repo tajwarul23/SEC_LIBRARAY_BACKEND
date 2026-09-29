@@ -27,7 +27,9 @@ export const getSmartSearchResults = async (req, res) => {
     // Chat memory is keyed by the logged-in user AND the browser's threadId,
     // so one student can never read or continue another student's thread
     // (e.g. a reused browser tab after logout, or a copied threadId).
-    const cacheKey = `${req.user.id}:${threadId.trim()}`;
+    // Guests have no user id, so each guest session uses its own guestId.
+    const owner = req.user.isGuest ? `guest-${req.user.guestId}` : req.user.id;
+    const cacheKey = `${owner}:${threadId.trim()}`;
     const answer = await askLibraryAssistant(input, cacheKey);
 
     return res.status(200).json({
