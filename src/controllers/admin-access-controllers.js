@@ -908,17 +908,21 @@ export const getBookStats = async (req, res) => {
 // GET /api/admin/access/stats/issued
 export const getIssueStats = async (req, res) => {
   try {
-    const [activeIssued, totalReturned] = await Promise.all([
+    // totalIssued used to repeat activeIssued, and totalReturned was never
+    // computed. activeIssued (what the dashboard shows) is unchanged.
+    const [totalIssued, activeIssued, totalReturned] = await Promise.all([
+      IssuedBook.countDocuments(),
       IssuedBook.countDocuments({ status: { $in: ["borrowed", "overdue"] } }),
-
+      IssuedBook.countDocuments({ status: "returned" }),
     ]);
 
     return res.status(200).json({
       success: true,
       message: "Issue stats fetched successfully",
       data: {
-        totalIssued: activeIssued,
+        totalIssued,
         activeIssued,
+        totalReturned,
       },
     });
   } catch (error) {

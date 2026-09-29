@@ -4,12 +4,6 @@ export const registerUserSchema = z.object({
   name: z.string().trim().min(2).max(100),
   regNo: z.string().trim().min(1).max(50),
   email: z.string().trim().email().toLowerCase(),
-  phone: z
-    .string()
-    .trim()
-    .min(7)
-    .max(20)
-    .regex(/^[+0-9\- ]+$/, "Phone may only contain digits, spaces, + and -"),
   password: z
     .string()
     .min(8)

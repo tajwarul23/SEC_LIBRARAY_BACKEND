@@ -36,7 +36,6 @@ export function guestStudentProfile(guestId) {
     name: "Guest",
     regNo: null,
     email: null,
-    phone: null,
     department: null,
     Session: null,
     gender: null,

@@ -8,7 +8,7 @@ import { createFineClearedNotification } from "./notification-service.js";
 const CURRENCY = "BDT";
 
 export async function initFinePayment(reqUser) {
-  const user = await User.findById(reqUser.id).select("name regNo email phone fine").lean();
+  const user = await User.findById(reqUser.id).select("name regNo email fine").lean();
 
   if (!user) {
     const error = new Error("User not found");
@@ -55,7 +55,8 @@ export async function initFinePayment(reqUser) {
     cus_state: "Sylhet",
     cus_postcode: "3100",
     cus_country: "Bangladesh",
-    cus_phone: user.phone || "N/A",
+    // Students have no phone on file; SSLCommerz requires the field
+    cus_phone: "N/A",
   };
 
   const apiResponse = await sslcz.init(initData);

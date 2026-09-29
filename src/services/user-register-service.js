@@ -7,12 +7,11 @@ export async function registerUser(data) {
     $or: [
       { email: data.email },
       { regNo: data.regNo },
-      { phone: data.phone },
     ],
   }).lean();
 
   if (existing) {
-    const err = new Error("User with this email, regNo, or phone already exists");
+    const err = new Error("User with this email or regNo already exists");
     err.statusCode = 409;
     throw err;
   }
@@ -34,7 +33,6 @@ export async function registerUser(data) {
     name: data.name,
     regNo: data.regNo,
     email: data.email,
-    phone: data.phone,
     password: passwordHash,
     department: data.department,
     Session: data.Session,
