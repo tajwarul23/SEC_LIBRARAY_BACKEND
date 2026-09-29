@@ -20,6 +20,13 @@ const app = express();
 // 1. Security & Header Middlewares
 // ==========================================
 app.disable("x-powered-by");
+
+// On Render, requests arrive through a proxy. Trusting one proxy hop makes
+// req.ip the real visitor's IP, so rate limits are per visitor instead of
+// one shared bucket for everyone. Off locally (no proxy; X-Forwarded-For
+// would be client-controlled). Override with TRUST_PROXY if the hop count differs.
+const trustProxy = process.env.TRUST_PROXY ?? (process.env.NODE_ENV === "production" ? "1" : "0");
+app.set("trust proxy", Number(trustProxy));
 app.use(helmet());
 app.use((req, res, next) => {
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
